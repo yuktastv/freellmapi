@@ -12,19 +12,21 @@ ghcr.io/yuktastv/freellmapi:sha-dc35b37@sha256:d5ff1a87e9e39d7449e313d108e535d48
 - `linux/arm64` `sha256:3ce0c5167a9708cfb1bb8cc505d6e3e2c3e1001cc24873a24b2e5de805732a52`
 - Both platforms carry `org.opencontainers.image.revision` = the full SHA and `org.opencontainers.image.source` = `https://github.com/yuktastv/freellmapi`.
 
-Copy this directory to each host. Every script prints `OK`/`FAIL` lines and stops at the first unsafe condition. None prints `ENCRYPTION_KEY`, passwords or API keys.
+The scripts live next to this file in `docs/deployment/`. Run them from a checkout of the release commit: `cd <checkout>/docs/deployment`, then follow the steps below. Every script prints `OK`/`FAIL` lines and stops at the first unsafe condition. None prints `ENCRYPTION_KEY`, passwords or API keys.
 
 ```bash
 export RELEASE_SHA=dc35b37eb9b1ec407d96530fd6d3dd56d2e3327d
 export RELEASE_IMAGE='ghcr.io/yuktastv/freellmapi:sha-dc35b37@sha256:d5ff1a87e9e39d7449e313d108e535d48d13c006966e39e86ee243de18ab35ed'
 ```
 
+Self-test of the safety logic (no Docker needed, from a checkout after `npm ci`): `docs/deployment/test-lib.sh`.
+
 Prerequisites on each host: Docker with Compose v2.24 or later, git, curl, python3, openssl, sha256sum, and nginx with a valid TLS certificate. Use the server block in `docs/en/proxy/02-nginx.md`, `proxy_pass http://127.0.0.1:3001`, and make it the `default_server`.
 
 ## Staging
 
-1. **Re-verify the image** (any machine): `./verify-image.sh "$RELEASE_SHA"`. It must print the same `IMAGE=` line as above.
-2. **Check out the release** (staging host): `git clone https://github.com/yuktastv/freellmapi.git freellmapi-staging && cd freellmapi-staging && git checkout "$RELEASE_SHA"`
+1. **Check out the release** (staging host): `git clone https://github.com/yuktastv/freellmapi.git ~/freellmapi-staging && cd ~/freellmapi-staging && git checkout "$RELEASE_SHA" && cd docs/deployment`
+2. **Re-verify the image**: `./verify-image.sh "$RELEASE_SHA"`. It must print the same `IMAGE=` line as above.
 3. **Deploy** (staging host): `./staging-deploy.sh ~/freellmapi-staging`
    - Uses Compose project `freellmapi-staging`, which has its own volume.
    - A fresh install gets a NEW encryption key. An existing staging install keeps its key and is migration-checked and backed up first.
