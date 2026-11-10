@@ -7,6 +7,11 @@
 # The project name gives staging its own volume (freellmapi-staging_freellmapi-data),
 # so it never shares a database or key with production.
 # Requires Docker Compose v2.24+ (for !reset).
+#
+# docker-compose.yml requires FREELLMAPI_IMAGE_TAG before any overlay applies,
+# so set it in the staging .env (use the same sha- tag as below). The `image:`
+# here replaces the base one, so staging runs THIS pin whatever that variable
+# says: a production .env copied by mistake cannot change the staging image.
 services:
   freellmapi:
     # Immutable: the image CI published for merge commit df40ef7.

@@ -756,6 +756,10 @@ describe('Update API', () => {
 
       expect(result.status).toBe(409);
       expect(result.body.error.type).toBe('not_configured');
+      // Names everything an operator has to set, not just the profile.
+      expect(result.body.error.message).toContain('FREELLMAPI_SELF_UPDATE_URL');
+      expect(result.body.error.message).toContain('WATCHTOWER_TOKEN');
+      expect(result.body.error.message).toContain('--profile autoupdate');
       expect(fetchMock).not.toHaveBeenCalled();
     });
 

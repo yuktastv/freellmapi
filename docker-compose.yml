@@ -2,10 +2,12 @@ services:
   freellmapi:
     # This fork's image. The repository is fixed here on purpose, so neither a
     # tag override nor the updater below can switch the container to upstream's
-    # image. Pin an immutable tag (sha-<commit>, published by
-    # .github/workflows/docker.yml) for staging and production; `main` follows
-    # the newest main-branch build. There is no `latest` until a v* release tag.
-    image: ghcr.io/yuktastv/freellmapi:${FREELLMAPI_IMAGE_TAG:-main}
+    # image. FREELLMAPI_IMAGE_TAG is REQUIRED (set it in .env): there is no
+    # default, so an install never drifts onto a moving tag by accident. Use an
+    # immutable sha-<commit> tag (published by .github/workflows/docker.yml for
+    # every main commit). `main` exists but moves with every merge; there is no
+    # `latest` until a v* release tag is pushed.
+    image: ghcr.io/yuktastv/freellmapi:${FREELLMAPI_IMAGE_TAG:?Set FREELLMAPI_IMAGE_TAG in .env to an image tag of ghcr.io/yuktastv/freellmapi, e.g. sha-<commit> (see .env.example)}
     build:
       context: .
       dockerfile: Dockerfile
@@ -58,8 +60,10 @@ services:
   # Opt-in self-update: `docker compose --profile autoupdate up -d` with
   # WATCHTOWER_TOKEN and FREELLMAPI_SELF_UPDATE_URL set in .env. It re-pulls
   # the freellmapi service's own image reference above (this fork's
-  # repository, at whatever tag you pinned), so an immutable sha- tag means it
-  # never changes code. Watchtower (the maintained nicholas-fedor
+  # repository, at whatever tag you pinned), so with an immutable sha- tag it
+  # never changes code: "Update now" only moves an install that tracks a
+  # moving tag such as `main`. To update a pinned install, change
+  # FREELLMAPI_IMAGE_TAG and re-run `docker compose up -d`. Watchtower (the maintained nicholas-fedor
   # fork) runs with only its token-protected update endpoint, which the
   # dashboard calls when you click "Update now"; it pulls the newer image and
   # recreates the freellmapi container with the same volume and settings.

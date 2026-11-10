@@ -700,7 +700,7 @@ export function createUpdateRouter(options: UpdateRouterOptions = {}): Router {
     if (!canSelfUpdate(currentIdentity.installation)) {
       return res.status(409).json({
         error: {
-          message: 'This install cannot update itself. Enable the autoupdate profile in docker-compose.yml.',
+          message: 'This install cannot update itself. Self-update needs both FREELLMAPI_SELF_UPDATE_URL (e.g. http://watchtower:8080) and WATCHTOWER_TOKEN set in .env, and the Watchtower sidecar started with `docker compose --profile autoupdate up -d`.',
           type: 'not_configured',
         },
       });
