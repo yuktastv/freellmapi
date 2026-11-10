@@ -40,6 +40,11 @@ const PURE_MODULES = [
   'header-value.ts',
   'provider-identity.ts',
   'provider-size-parser.ts',
+  // Locality check for setup, Ollama open-loopback and the desktop shortcuts;
+  // reads only the request, the app's own `trust proxy` setting and the
+  // DISABLE_LOCAL_TRUST switch. A DB or config import here would make a
+  // security decision depend on state that can fail or drift.
+  'request-locality.ts',
   'retry-hint.ts',
   // Search platform list; the provider list, keys route and search service import it.
   'search-platforms.ts',

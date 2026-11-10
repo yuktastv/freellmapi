@@ -69,6 +69,20 @@ describe('Ollama emulation', () => {
     expect((await request(app, 'GET', '/api/version')).body.version).toMatch(/^\d+\.\d+\.\d+$/);
   });
 
+  it('closes open-loopback to every caller when DISABLE_LOCAL_TRUST=true; key-required still works', async () => {
+    setSetting('ollama_emulation', 'open-loopback');
+    process.env.DISABLE_LOCAL_TRUST = 'true';
+    try {
+      expect((await request(app, 'GET', '/api/tags')).status).toBe(403);
+      setSetting('ollama_emulation', 'key-required');
+      expect((await request(app, 'GET', '/api/tags')).status).toBe(401);
+      const keyed = await request(app, 'GET', '/api/tags', undefined, { Authorization: `Bearer ${getUnifiedApiKey()}` });
+      expect(keyed.status).toBe(200);
+    } finally {
+      delete process.env.DISABLE_LOCAL_TRUST;
+    }
+  });
+
   it('advertises auto plus only available models, and accepts :latest names', async () => {
     setSetting('ollama_emulation', 'open-loopback');
     const tags = await request(app, 'GET', '/api/tags');
@@ -139,7 +153,8 @@ describe('Ollama emulation', () => {
   it('does not treat LAN peers as loopback clients', () => {
     const peer = (remoteAddress: string, forwarded?: string) => ({
       socket: { remoteAddress },
-      headers: forwarded ? { 'x-forwarded-for': forwarded } : {},
+      httpVersion: '1.1',
+      headers: { host: 'localhost:11434', ...(forwarded ? { 'x-forwarded-for': forwarded } : {}) },
     }) as any;
     expect(isLoopback(peer('127.0.0.1'))).toBe(true);
     expect(isLoopback(peer('::1'))).toBe(true);
@@ -147,7 +162,34 @@ describe('Ollama emulation', () => {
     expect(isLoopback(peer('192.168.1.20'))).toBe(false);
     expect(isLoopback(peer('10.0.0.5'))).toBe(false);
     expect(isLoopback(peer('127.0.0.1', '203.0.113.5'))).toBe(false);
-    expect(isLoopback(peer('127.0.0.1', '127.0.0.1'))).toBe(true);
+    // A forwarded chain can only be verified through TRUST_PROXY; a bare
+    // request object has none, so even a loopback claim is refused.
+    expect(isLoopback(peer('127.0.0.1', '127.0.0.1'))).toBe(false);
+    expect(isLoopback(peer('127.0.0.1', '127.0.0.1, 203.0.113.5'))).toBe(false);
+  });
+
+  // Regression: open-loopback served keyless inference to any client that
+  // reached a same-host reverse proxy and wrote X-Forwarded-For: 127.0.0.1
+  // (nginx appends the real address after it, so the first hop is the
+  // attacker's). The real socket in this test is loopback, as it is behind
+  // such a proxy.
+  it('refuses keyless inference to spoofed loopback forwarding headers', async () => {
+    setSetting('ollama_emulation', 'open-loopback');
+    for (const headers of [
+      { 'X-Forwarded-For': '127.0.0.1, 203.0.113.5' },
+      { 'X-Forwarded-For': '127.0.0.1' },
+      { 'X-Real-IP': '127.0.0.1' },
+      { Forwarded: 'for=127.0.0.1' },
+    ] as Record<string, string>[]) {
+      const tags = await request(app, 'GET', '/api/tags', undefined, headers);
+      expect(tags.status, JSON.stringify(headers)).toBe(403);
+      const chat = await request(app, 'POST', '/api/chat', {
+        model: 'auto', messages: [{ role: 'user', content: 'hi' }], stream: false,
+      }, headers);
+      expect(chat.status, JSON.stringify(headers)).toBe(403);
+    }
+    // A direct local client keeps working.
+    expect((await request(app, 'GET', '/api/tags')).status).toBe(200);
   });
 
   it('emits Ollama-compatible NDJSON chat frames', async () => {
