@@ -1,7 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Express } from 'express';
 import { createApp } from '../../app.js';
-import { getDb, getUnifiedApiKey, initDb } from '../../db/index.js';
+import { getDb, getUnifiedApiKey, initDb, setSetting } from '../../db/index.js';
 import { encrypt } from '../../lib/crypto.js';
 import { mintDashboardToken } from '../helpers/auth.js';
 
@@ -101,9 +101,16 @@ describe('revocable URL-token aliases', () => {
     expect(responses.body.object).toBe('response');
     expect(responses.body.output_text).toBe('headerless response');
 
-    const ollamaTags = await request(app, 'GET', `/v1/t/${minted.body.token}/api/tags`);
-    expect(ollamaTags.status).toBe(200);
-    expect(ollamaTags.body.models.length).toBeGreaterThan(0);
+    // Ollama emulation is off by default, and 'off' applies to URL tokens too.
+    expect((await request(app, 'GET', `/v1/t/${minted.body.token}/api/tags`)).status).toBe(404);
+    // Once emulation is on (either mode), the URL token stands in for the key.
+    for (const mode of ['key-required', 'open-loopback']) {
+      setSetting('ollama_emulation', mode);
+      const ollamaTags = await request(app, 'GET', `/v1/t/${minted.body.token}/api/tags`);
+      expect(ollamaTags.status, mode).toBe(200);
+      expect(ollamaTags.body.models.length).toBeGreaterThan(0);
+    }
+    setSetting('ollama_emulation', 'off');
 
     const revoked = await request(app, 'DELETE', `/api/settings/url-tokens/${minted.body.id}`, undefined, {
       Authorization: `Bearer ${dashboardToken}`,

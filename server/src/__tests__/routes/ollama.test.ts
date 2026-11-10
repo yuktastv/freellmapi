@@ -83,6 +83,28 @@ describe('Ollama emulation', () => {
     }
   });
 
+  // Regression: authorize() accepted a URL token before reading the mode, so
+  // "Ollama emulation: off" still served /v1/t/<token>/api/* to token holders.
+  it('keeps every Ollama route closed to URL tokens while emulation is off', async () => {
+    const minted = await request(app, 'POST', '/api/settings/url-tokens', { label: 'ollama-off' }, {
+      Authorization: `Bearer ${dashboardToken}`,
+    });
+    expect(minted.status).toBe(201);
+    const base = `/v1/t/${minted.body.token}`;
+    setSetting('ollama_emulation', 'off');
+    expect((await request(app, 'GET', `${base}/api/tags`)).status).toBe(404);
+    expect((await request(app, 'GET', `${base}/api/version`)).status).toBe(404);
+    expect((await request(app, 'POST', `${base}/api/show`, { model: 'auto' })).status).toBe(404);
+    expect((await request(app, 'POST', `${base}/api/chat`, { model: 'auto', messages: [{ role: 'user', content: 'hi' }], stream: false })).status).toBe(404);
+    expect((await request(app, 'POST', `${base}/api/generate`, { model: 'auto', prompt: 'hi', stream: false })).status).toBe(404);
+    expect((await request(app, 'POST', `${base}/api/embed`, { model: 'auto', input: 'hi' })).status).toBe(404);
+    // The token still works for the OpenAI surface; only Ollama is off.
+    expect((await request(app, 'GET', `${base}/models`)).status).toBe(200);
+    // Turning emulation on (key-required) lets the token stand in for the key.
+    setSetting('ollama_emulation', 'key-required');
+    expect((await request(app, 'GET', `${base}/api/tags`)).status).toBe(200);
+  });
+
   it('advertises auto plus only available models, and accepts :latest names', async () => {
     setSetting('ollama_emulation', 'open-loopback');
     const tags = await request(app, 'GET', '/api/tags');

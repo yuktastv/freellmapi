@@ -31,13 +31,17 @@ export function isLoopback(req: Request): boolean {
 }
 
 function authorize(req: Request, res: Response): boolean {
-  if ((req as Request & { urlTokenAuthenticated?: boolean }).urlTokenAuthenticated) {
-    return true;
-  }
+  // 'off' closes the Ollama surface for EVERY caller, URL tokens included: a
+  // dashboard switch that reads "disabled" must not leave the endpoints open to
+  // anyone holding a token. With emulation on, a verified URL token stands in
+  // for the API key in either mode.
   const mode = getOllamaEmulationMode();
   if (mode === 'off') {
     res.status(404).json({ error: 'Ollama emulation is disabled' });
     return false;
+  }
+  if ((req as Request & { urlTokenAuthenticated?: boolean }).urlTokenAuthenticated) {
+    return true;
   }
   if (mode === 'open-loopback') {
     if (isLoopback(req)) return true;
