@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { IpWindowTracker, createProxyRateLimiter, createAdminRateLimiter } from '../../middleware/rateLimit.js';
+import { IpWindowTracker, createProxyRateLimiter, createAdminRateLimiter, rateLimitKey } from '../../middleware/rateLimit.js';
 
 const WINDOW_MS = 60_000;
 
@@ -89,5 +89,63 @@ describe.each([
     expect(blocked.passed).toBe(false);
     expect(blocked.res.statusCode).toBe(429);
     expect(blocked.res.headers['retry-after']).toBeDefined();
+  });
+});
+
+describe('rateLimitKey', () => {
+  it('groups every address in an IPv6 /64 into one bucket', () => {
+    const key = rateLimitKey('2001:db8:1:2::1');
+    expect(key).toBe('2001:db8:1:2::/64');
+    for (const a of ['2001:db8:1:2::ffff', '2001:0db8:0001:0002:aaaa:bbbb:cccc:dddd', '2001:DB8:1:2:0:0:0:9', '2001:db8:1:2::1%eth0']) {
+      expect(rateLimitKey(a), a).toBe(key);
+    }
+  });
+
+  it('keeps different /64s apart', () => {
+    expect(rateLimitKey('2001:db8:1:3::1')).not.toBe(rateLimitKey('2001:db8:1:2::1'));
+    expect(rateLimitKey('2001:db8::1')).toBe('2001:db8:0:0::/64');
+    expect(rateLimitKey('::1')).toBe('0:0:0:0::/64');
+    expect(rateLimitKey('64:ff9b::192.0.2.1')).toBe('64:ff9b:0:0::/64');
+  });
+
+  it('counts IPv4-mapped IPv6 as the IPv4 address, and leaves IPv4 and non-IPs alone', () => {
+    expect(rateLimitKey('::ffff:203.0.113.7')).toBe('203.0.113.7');
+    expect(rateLimitKey('::FFFF:203.0.113.7')).toBe('203.0.113.7');
+    expect(rateLimitKey('203.0.113.7')).toBe('203.0.113.7');
+    expect(rateLimitKey('unknown')).toBe('unknown');
+  });
+});
+
+describe.each([
+  ['proxy', createProxyRateLimiter],
+  ['admin', createAdminRateLimiter],
+] as const)('%s rate limiter, IPv6 address rotation (regression)', (_name, create) => {
+  const run = (limiter: ReturnType<typeof create>, ip: string) => {
+    const res = fakeRes();
+    let passed = false;
+    limiter(fakeReq(ip), res, () => { passed = true; });
+    return { passed, status: res.statusCode };
+  };
+
+  // Before: every address in the attacker's /64 got its own fresh window.
+  it('limits a client that rotates addresses inside its /64', () => {
+    const limiter = create(3);
+    for (let i = 1; i <= 3; i++) expect(run(limiter, `2001:db8:1:2::${i.toString(16)}`).passed).toBe(true);
+    const fourth = run(limiter, '2001:db8:1:2::beef');
+    expect(fourth.passed).toBe(false);
+    expect(fourth.status).toBe(429);
+  });
+
+  it('does not penalize a neighbouring /64', () => {
+    const limiter = create(3);
+    for (let i = 1; i <= 4; i++) run(limiter, `2001:db8:1:2::${i}`);
+    expect(run(limiter, '2001:db8:1:3::1').passed).toBe(true);
+  });
+
+  it('shares one bucket between an IPv4 client and its IPv4-mapped form', () => {
+    const limiter = create(2);
+    expect(run(limiter, '203.0.113.7').passed).toBe(true);
+    expect(run(limiter, '::ffff:203.0.113.7').passed).toBe(true);
+    expect(run(limiter, '203.0.113.7').passed).toBe(false);
   });
 });

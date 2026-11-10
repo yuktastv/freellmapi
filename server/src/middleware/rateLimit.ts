@@ -1,3 +1,4 @@
+import net from 'node:net';
 import type { Request, Response, NextFunction } from 'express';
 
 // Per-IP fixed-window rate limiter for the public /v1 proxy (#35, item #6).
@@ -78,6 +79,44 @@ export class IpWindowTracker {
   }
 }
 
+/**
+ * The bucket a client address is counted in.
+ *
+ * IPv6 clients are grouped by their /64. A /64 is the smallest prefix an ISP
+ * or cloud provider hands to one subscriber or one host, and its owner can use
+ * every one of its 2^64 addresses, so a per-address count lets a single
+ * attacker rotate addresses and never hit the limit. IPv4-mapped IPv6
+ * (::ffff:1.2.3.4) counts as the IPv4 address, so a dual-stack socket cannot
+ * give one client two buckets. Anything that is not an IP is used as-is.
+ */
+export function rateLimitKey(ip: string): string {
+  let addr = ip.trim().toLowerCase();
+  const zone = addr.indexOf('%');
+  if (zone !== -1) addr = addr.slice(0, zone);
+  if (addr.startsWith('::ffff:') && net.isIPv4(addr.slice(7))) return addr.slice(7);
+  if (!net.isIPv6(addr)) return addr;
+  return `${ipv6Prefix64(addr)}::/64`;
+}
+
+/** First four hextets of a valid IPv6 address, normalized (no leading zeros). */
+function ipv6Prefix64(addr: string): string {
+  let text = addr;
+  // An embedded IPv4 tail ("::1.2.3.4") becomes its two hextets.
+  const lastColon = text.lastIndexOf(':');
+  const tail = text.slice(lastColon + 1);
+  if (tail.includes('.')) {
+    const o = tail.split('.').map(Number) as [number, number, number, number];
+    text = `${text.slice(0, lastColon + 1)}${((o[0] << 8) | o[1]).toString(16)}:${((o[2] << 8) | o[3]).toString(16)}`;
+  }
+  const [head, rest] = text.split('::') as [string, string | undefined];
+  const headGroups = head ? head.split(':') : [];
+  const tailGroups = rest ? rest.split(':') : [];
+  const groups = rest === undefined
+    ? headGroups
+    : [...headGroups, ...Array(8 - headGroups.length - tailGroups.length).fill('0'), ...tailGroups];
+  return groups.slice(0, 4).map(g => parseInt(g, 16).toString(16)).join(':');
+}
+
 function parseLimit(): number {
   const raw = process.env.PROXY_RATE_LIMIT_RPM;
   if (raw === undefined || raw.trim() === '') return DEFAULT_RPM;
@@ -99,7 +138,7 @@ export function createProxyRateLimiter(rpmLimit?: number, options: RateLimiterOp
     const now = Date.now();
     const ip = req.ip ?? req.socket.remoteAddress ?? 'unknown';
 
-    const state = windows.hit(ip, now);
+    const state = windows.hit(rateLimitKey(ip), now);
 
     res.setHeader('X-RateLimit-Limit', String(limit));
     res.setHeader('X-RateLimit-Remaining', String(Math.max(0, limit - state.count)));
@@ -155,7 +194,7 @@ export function createAdminRateLimiter(rpm?: number, options: RateLimiterOptions
     const now = Date.now();
     const ip = req.ip ?? req.socket.remoteAddress ?? 'unknown';
 
-    const state = windows.hit(ip, now);
+    const state = windows.hit(rateLimitKey(ip), now);
 
     res.setHeader('X-RateLimit-Limit', String(limit));
     res.setHeader('X-RateLimit-Remaining', String(Math.max(0, limit - state.count)));
