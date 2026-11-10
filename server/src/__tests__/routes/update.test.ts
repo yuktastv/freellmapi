@@ -128,7 +128,7 @@ describe('Update API', () => {
         checkedAt: '2026-07-28T14:00:00.000Z',
       });
       expect(fetchMock).toHaveBeenCalledWith(
-        `https://api.github.com/repos/tashfeenahmed/freellmapi/compare/${LOCAL_SHA}...main`,
+        `https://api.github.com/repos/yuktastv/freellmapi/compare/${LOCAL_SHA}...main`,
         expect.any(Object),
       );
     });
@@ -136,7 +136,7 @@ describe('Update API', () => {
     it('prefers a validated packaged-build identity and truncates commit messages', async () => {
       const longMessage = 'x'.repeat(250);
       const fetchMock = vi.fn(async (url: string | URL | RequestInfo) => (String(url).includes('/releases/latest')
-        ? response({ tag_name: 'v0.12.0', html_url: 'https://github.com/tashfeenahmed/freellmapi/releases/tag/v0.12.0' })
+        ? response({ tag_name: 'v0.12.0', html_url: 'https://github.com/yuktastv/freellmapi/releases/tag/v0.12.0' })
         : response(compareBody('ahead', longMessage))));
       const execMock = vi.fn(async () => ({ stdout: `${REMOTE_SHA}\n` }));
       const { app } = createTestApp({
@@ -191,7 +191,7 @@ describe('Update API', () => {
           if (String(url).includes('/releases/latest')) {
             return response({
               tag_name: 'v0.11.0',
-              html_url: 'https://github.com/tashfeenahmed/freellmapi/releases/tag/v0.11.0',
+              html_url: 'https://github.com/yuktastv/freellmapi/releases/tag/v0.11.0',
             });
           }
           return response(compareBody('identical'));
@@ -205,7 +205,7 @@ describe('Update API', () => {
 
         expect(result.body).toMatchObject({ status: 'current', installation });
         expect(fetchMock).toHaveBeenCalledWith(
-          `https://api.github.com/repos/tashfeenahmed/freellmapi/compare/${LOCAL_SHA}...v0.11.0`,
+          `https://api.github.com/repos/yuktastv/freellmapi/compare/${LOCAL_SHA}...v0.11.0`,
           expect.any(Object),
         );
         // 'identical' against the tag: no update offered for untagged main commits.
@@ -217,7 +217,7 @@ describe('Update API', () => {
           if (String(url).includes('/releases/latest')) {
             return response({
               tag_name: 'v0.12.0',
-              html_url: 'https://github.com/tashfeenahmed/freellmapi/releases/tag/v0.12.0',
+              html_url: 'https://github.com/yuktastv/freellmapi/releases/tag/v0.12.0',
             });
           }
           return response(compareBody('ahead'));
@@ -254,7 +254,7 @@ describe('Update API', () => {
           if (String(url).includes('/releases/latest')) {
             return response({
               tag_name: 'v0.11.0',
-              html_url: 'https://github.com/tashfeenahmed/freellmapi/releases/tag/v0.11.0',
+              html_url: 'https://github.com/yuktastv/freellmapi/releases/tag/v0.11.0',
             });
           }
           return response({ message: 'rate limited' }, 403);
@@ -324,7 +324,7 @@ describe('Update API', () => {
       });
       expect(fetchMock).toHaveBeenNthCalledWith(
         2,
-        'https://github.com/tashfeenahmed/freellmapi/commits/main.atom',
+        'https://github.com/yuktastv/freellmapi/commits/main.atom',
         expect.any(Object),
       );
     });
@@ -474,6 +474,7 @@ describe('Update API', () => {
       expect(result.body).toEqual({
         status: 'unknown',
         installation: 'source',
+        repository: 'yuktastv/freellmapi',
         localSha: LOCAL_SHA.slice(0, 7),
         checkedAt: '2026-07-28T14:00:00.000Z',
         version: VERSION,
@@ -781,12 +782,73 @@ describe('Update API', () => {
       expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('HTTP 401'));
     });
 
+    // Regression: FREELLMAPI_UPDATE_CHECK=off hid the button (/status drops
+    // selfUpdate) but POST /apply never read it, so an authenticated request
+    // still made Watchtower pull and recreate the container.
+    it('refuses "Update now" when updates are switched off, even with the sidecar configured', async () => {
+      const fetchMock = vi.fn(async () => new Response(null, { status: 202 }));
+      const { app } = createTestApp({ env: { ...sidecar, FREELLMAPI_UPDATE_CHECK: 'off' }, fetch: fetchMock });
+
+      const result = await httpPost(app, '/api/update/apply');
+
+      expect(result.status).toBe(409);
+      expect(result.body.error.type).toBe('disabled');
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect((await httpGet(app, '/api/update/status')).body).not.toHaveProperty('selfUpdate');
+    });
+
+    it('refuses "Update now" when FREELLMAPI_UPDATE_REPOSITORY is invalid', async () => {
+      const fetchMock = vi.fn(async () => new Response(null, { status: 202 }));
+      const { app, logger } = createTestApp({ env: { ...sidecar, FREELLMAPI_UPDATE_REPOSITORY: 'not a repo' }, fetch: fetchMock });
+
+      expect((await httpPost(app, '/api/update/apply')).status).toBe(409);
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('FREELLMAPI_UPDATE_REPOSITORY'));
+    });
+
     it('tells the dashboard the install can update itself', async () => {
       const { app } = createTestApp({ env: sidecar });
       expect((await httpGet(app, '/api/update/status')).body.selfUpdate).toBe(true);
 
       const { app: plain } = createTestApp({ env: { FREELLMAPI_INSTALL_METHOD: 'docker', FREELLMAPI_COMMIT_SHA: LOCAL_SHA } });
       expect((await httpGet(plain, '/api/update/status')).body).not.toHaveProperty('selfUpdate');
+    });
+  });
+
+  describe('update repository', () => {
+    it('defaults to this fork and reports it in the check result', async () => {
+      const fetchMock = vi.fn(async () => response(compareBody('identical')));
+      const { app } = createTestApp({ fetch: fetchMock });
+
+      const result = await httpGet(app, '/api/update/check');
+
+      expect(result.body.repository).toBe('yuktastv/freellmapi');
+      expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('https://api.github.com/repos/yuktastv/freellmapi/compare/'), expect.any(Object));
+      expect(fetchMock).not.toHaveBeenCalledWith(expect.stringContaining('tashfeenahmed'), expect.anything());
+    });
+
+    it('uses FREELLMAPI_UPDATE_REPOSITORY when it is a valid owner/name', async () => {
+      const fetchMock = vi.fn(async () => response(compareBody('identical')));
+      const { app } = createTestApp({ env: { FREELLMAPI_UPDATE_REPOSITORY: ' example-org/free.llm_api ' }, fetch: fetchMock });
+
+      const result = await httpGet(app, '/api/update/check');
+
+      expect(result.body.repository).toBe('example-org/free.llm_api');
+      expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('https://api.github.com/repos/example-org/free.llm_api/compare/'), expect.any(Object));
+    });
+
+    it.each([
+      'tashfeenahmed', 'a/b/c', 'https://github.com/x/y', '-bad/repo', 'owner/..', 'owner/.', 'own er/repo', 'owner/re?po',
+    ])('disables checks without any network request for invalid %j', async (value) => {
+      const fetchMock = vi.fn();
+      const execMock = vi.fn(async () => ({ stdout: `${LOCAL_SHA}\n` }));
+      const { app, logger } = createTestApp({ env: { FREELLMAPI_UPDATE_REPOSITORY: value }, fetch: fetchMock, execFile: execMock });
+
+      expect((await httpGet(app, '/api/update/check')).body.status).toBe('disabled');
+      expect((await httpGet(app, '/api/update/status')).body.status).toBe('disabled');
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(execMock).not.toHaveBeenCalled();
+      expect(logger.error).toHaveBeenCalled();
     });
   });
 });
