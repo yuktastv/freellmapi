@@ -15,13 +15,13 @@ The production image, the Compose quickstart, and everything about running FreeL
 
 ## The image
 
-FreeLLMAPI publishes a single production image containing the Express server and the built React dashboard:
+This fork publishes a single production image containing the Express server and the built React dashboard:
 
 ```bash
-docker pull ghcr.io/tashfeenahmed/freellmapi:latest   # or pin a release, e.g. :v1.2.3
+docker pull ghcr.io/yuktastv/freellmapi:sha-<commit>   # immutable: recommended for production
 ```
 
-Published tags: `latest` (default branch), `v*.*.*` (git release tags), and `sha-<commit>`. The image is multi-arch (`linux/amd64` + `linux/arm64`, so it runs on a Raspberry Pi).
+Published tags: `sha-<commit>` for every `main` commit (immutable; use these for staging and production), `main` (moves with every merge), and `v*.*.*` plus `latest` once the fork pushes a release tag (none yet). The image is multi-arch (`linux/amd64` + `linux/arm64`, so it runs on a Raspberry Pi). `docker-compose.yml` requires `FREELLMAPI_IMAGE_TAG` and has no default, so an install never drifts onto a moving tag. To verify what you run: `docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' ghcr.io/yuktastv/freellmapi:<tag>` prints the full commit SHA.
 
 Build shape ([Dockerfile](../../../Dockerfile)):
 
@@ -36,15 +36,19 @@ Build shape ([Dockerfile](../../../Dockerfile)):
 Prerequisites: Docker, Docker Compose, OpenSSL. macOS/Linux:
 
 ```bash
-git clone https://github.com/tashfeenahmed/freellmapi.git
+git clone https://github.com/yuktastv/freellmapi.git
 cd freellmapi
 
-# Generate an encryption key for at-rest key storage
+# Generate an encryption key for at-rest key storage, and pin the image to
+# the commit you cloned
 ENCRYPTION_KEY="$(openssl rand -hex 32)"
-printf "ENCRYPTION_KEY=%s\nPORT=3001\n" "$ENCRYPTION_KEY" > .env
+IMAGE_TAG="sha-$(git rev-parse --short=7 HEAD)"
+printf "ENCRYPTION_KEY=%s\nPORT=3001\nFREELLMAPI_IMAGE_TAG=%s\n" "$ENCRYPTION_KEY" "$IMAGE_TAG" > .env
 
 docker compose up -d
 ```
+
+> **Already running the upstream image?** Do not just switch. Check database compatibility and back up the data volume first: see [Switching from the upstream image](02-updates-and-backup.md#switching-from-the-upstream-image).
 
 Windows PowerShell variant and a curl one-liner bootstrap live in [docs/en/install/01-install.md#docker-compose](../install/01-install.md#docker-compose). Then follow the logs:
 

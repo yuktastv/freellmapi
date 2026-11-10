@@ -7,8 +7,21 @@ import { getAppVersion } from '../lib/app-version.js';
 
 const execFileAsync = promisify(nodeExecFile);
 
-const REPOSITORY = 'tashfeenahmed/freellmapi';
-const RELEASES_URL = `https://github.com/${REPOSITORY}/releases`;
+// The repository this build's commits and releases live in. A fork must compare
+// itself against its OWN history: against upstream, a fork commit reads as
+// unknown, and "update" would mean upstream's code. FREELLMAPI_UPDATE_REPOSITORY
+// overrides it; a value that is not owner/name disables the update surface
+// rather than falling back to a repository nobody chose.
+export const DEFAULT_UPDATE_REPOSITORY = 'yuktastv/freellmapi';
+const REPOSITORY_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9_.-]{1,100}$/;
+
+export function resolveUpdateRepository(env: NodeJS.ProcessEnv): string | null {
+  const raw = env.FREELLMAPI_UPDATE_REPOSITORY?.trim();
+  if (!raw) return DEFAULT_UPDATE_REPOSITORY;
+  if (!REPOSITORY_PATTERN.test(raw)) return null;
+  const name = raw.split('/')[1]!;
+  return name === '.' || name === '..' ? null : raw;
+}
 const CACHE_TTL_MS = 5 * 60 * 1000;
 /**
  * The automatic release check is opt-in (see UPDATE_CHECK_SETTING), and even
@@ -50,6 +63,8 @@ interface CheckResult {
   version: string | null;
   /** A Docker install wired to its updater sidecar can update itself (POST /apply). */
   selfUpdate?: boolean;
+  /** owner/name the comparison ran against, for the source-install command. */
+  repository?: string;
   remoteSha?: string;
   remoteMessage?: string;
   remoteDate?: string;
@@ -354,14 +369,22 @@ export function createUpdateRouter(options: UpdateRouterOptions = {}): Router {
   const logger = options.logger ?? console;
   const appVersion = options.version ?? getAppVersion;
   const autoCheckEnabled = options.autoCheckEnabled ?? isAutoUpdateCheckEnabled;
-  const updateCheckDisabled = env.FREELLMAPI_UPDATE_CHECK?.trim().toLowerCase() === 'off';
+  const repository = resolveUpdateRepository(env);
+  if (!repository) {
+    logger.error('[update] FREELLMAPI_UPDATE_REPOSITORY must be owner/name; update checks and self-update are disabled.');
+  }
+  // The deployment kill switch for the WHOLE update surface: checks, the
+  // release reminder, and "Update now" (canSelfUpdate below).
+  const updateCheckDisabled = env.FREELLMAPI_UPDATE_CHECK?.trim().toLowerCase() === 'off' || !repository;
+  const releasesUrl = `https://github.com/${repository}/releases`;
   const githubToken = env.FREELLMAPI_UPDATE_GITHUB_TOKEN?.trim();
   // docker-compose.yml's opt-in `autoupdate` profile runs a Watchtower sidecar
   // with only its token-protected update endpoint enabled; these point at it.
   const selfUpdateUrl = env.FREELLMAPI_SELF_UPDATE_URL?.trim().replace(/\/+$/, '');
   const selfUpdateToken = env.FREELLMAPI_SELF_UPDATE_TOKEN?.trim();
   const selfUpdateConfigured = Boolean(selfUpdateUrl && selfUpdateToken);
-  const canSelfUpdate = (installation: Installation) => installation === 'docker' && selfUpdateConfigured;
+  const canSelfUpdate = (installation: Installation) =>
+    !updateCheckDisabled && installation === 'docker' && selfUpdateConfigured;
 
   let identity: Identity | undefined;
   let cache: CachedResult | null = null;
@@ -418,6 +441,7 @@ export function createUpdateRouter(options: UpdateRouterOptions = {}): Router {
     const checkedAtMs = now();
     const baseResult = {
       installation: currentIdentity.installation,
+      repository: repository!,
       ...(canSelfUpdate(currentIdentity.installation) ? { selfUpdate: true } : {}),
       localSha: currentIdentity.sha!.slice(0, 7),
       checkedAt: new Date(checkedAtMs).toISOString(),
@@ -438,7 +462,7 @@ export function createUpdateRouter(options: UpdateRouterOptions = {}): Router {
       }
     }
 
-    const url = `https://api.github.com/repos/${REPOSITORY}/compare/${currentIdentity.sha}...${compareTarget}`;
+    const url = `https://api.github.com/repos/${repository}/compare/${currentIdentity.sha}...${compareTarget}`;
     const response = await fetchImpl(url, {
       headers: githubHeaders('application/vnd.github+json'),
       signal: AbortSignal.timeout(10_000),
@@ -453,7 +477,7 @@ export function createUpdateRouter(options: UpdateRouterOptions = {}): Router {
       if (releaseOnly) {
         throw new Error(`GitHub compare request returned HTTP ${response.status}`);
       }
-      const atomResponse = await fetchImpl(`https://github.com/${REPOSITORY}/commits/main.atom`, {
+      const atomResponse = await fetchImpl(`https://github.com/${repository}/commits/main.atom`, {
         headers: {
           Accept: 'application/atom+xml',
           'User-Agent': 'freellmapi-update-checker',
@@ -515,7 +539,7 @@ export function createUpdateRouter(options: UpdateRouterOptions = {}): Router {
   }
 
   async function performReleaseCheck(): Promise<LatestRelease> {
-    const response = await fetchImpl(`https://api.github.com/repos/${REPOSITORY}/releases/latest`, {
+    const response = await fetchImpl(`https://api.github.com/repos/${repository}/releases/latest`, {
       headers: githubHeaders('application/vnd.github+json'),
       signal: AbortSignal.timeout(10_000),
     });
@@ -532,9 +556,9 @@ export function createUpdateRouter(options: UpdateRouterOptions = {}): Router {
     // The release notes are rendered as Markdown in the dashboard, so the body
     // is capped rather than trusted at whatever length GitHub returns, and the
     // link is only honoured when it points back at this repository.
-    const htmlUrl = typeof body.html_url === 'string' && body.html_url.startsWith(`${RELEASES_URL}/`)
+    const htmlUrl = typeof body.html_url === 'string' && body.html_url.startsWith(`${releasesUrl}/`)
       ? body.html_url
-      : RELEASES_URL;
+      : releasesUrl;
 
     return {
       tagName: body.tag_name.trim().slice(0, MAX_TAG_LENGTH),
@@ -662,11 +686,21 @@ export function createUpdateRouter(options: UpdateRouterOptions = {}): Router {
    * server to come back on the new build.
    */
   router.post('/apply', async (_req: Request, res: Response) => {
+    // Checked before identity: with updates switched off, "Update now" must not
+    // reach the sidecar even when its URL and token are configured.
+    if (updateCheckDisabled) {
+      return res.status(409).json({
+        error: {
+          message: 'Updates are disabled on this install (FREELLMAPI_UPDATE_CHECK=off or an invalid FREELLMAPI_UPDATE_REPOSITORY).',
+          type: 'disabled',
+        },
+      });
+    }
     const currentIdentity = await resolveIdentity();
     if (!canSelfUpdate(currentIdentity.installation)) {
       return res.status(409).json({
         error: {
-          message: 'This install cannot update itself. Enable the autoupdate profile in docker-compose.yml.',
+          message: 'This install cannot update itself. Self-update needs both FREELLMAPI_SELF_UPDATE_URL (e.g. http://watchtower:8080) and WATCHTOWER_TOKEN set in .env, and the Watchtower sidecar started with `docker compose --profile autoupdate up -d`.',
           type: 'not_configured',
         },
       });

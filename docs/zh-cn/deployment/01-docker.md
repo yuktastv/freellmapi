@@ -15,13 +15,13 @@
 
 ## 镜像
 
-FreeLLMAPI 发布单个生产镜像，内含 Express 服务器和构建好的 React 仪表盘：
+本 fork 发布单个生产镜像，内含 Express 服务器和构建好的 React 仪表盘：
 
 ```bash
-docker pull ghcr.io/tashfeenahmed/freellmapi:latest   # 或固定到某个发布版本，如 :v1.2.3
+docker pull ghcr.io/yuktastv/freellmapi:sha-<commit>   # 不可变，推荐用于生产
 ```
 
-已发布的标签：`latest`（默认分支）、`v*.*.*`（git release 标签）和 `sha-<commit>`。镜像是多架构的（`linux/amd64` + `linux/arm64`，所以树莓派也能跑）。
+已发布的标签：`main` 上每个提交的 `sha-<commit>`（不可变，预发布和生产环境请使用这些）、`main`（每次合并都会变），以及本 fork 推送发布标签之后的 `v*.*.*` 和 `latest`（目前还没有）。镜像是多架构的（`linux/amd64` + `linux/arm64`，所以树莓派也能跑）。`docker-compose.yml` 要求设置 `FREELLMAPI_IMAGE_TAG` 且没有默认值，所以安装不会意外漂移到可变标签上。验证正在运行的镜像：`docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' ghcr.io/yuktastv/freellmapi:<tag>` 会打印完整的提交 SHA。
 
 构建形态（[Dockerfile](../../../Dockerfile)）：
 
@@ -36,15 +36,18 @@ docker pull ghcr.io/tashfeenahmed/freellmapi:latest   # 或固定到某个发布
 前置条件：Docker、Docker Compose、OpenSSL。macOS/Linux：
 
 ```bash
-git clone https://github.com/tashfeenahmed/freellmapi.git
+git clone https://github.com/yuktastv/freellmapi.git
 cd freellmapi
 
-# 生成用于静态存储密钥的加密密钥
+# 生成用于静态存储密钥的加密密钥，并把镜像固定到你克隆的提交
 ENCRYPTION_KEY="$(openssl rand -hex 32)"
-printf "ENCRYPTION_KEY=%s\nPORT=3001\n" "$ENCRYPTION_KEY" > .env
+IMAGE_TAG="sha-$(git rev-parse --short=7 HEAD)"
+printf "ENCRYPTION_KEY=%s\nPORT=3001\nFREELLMAPI_IMAGE_TAG=%s\n" "$ENCRYPTION_KEY" "$IMAGE_TAG" > .env
 
 docker compose up -d
 ```
+
+> **已经在运行上游镜像？** 不要直接切换。先检查数据库兼容性并备份数据卷：见[从上游镜像切换](02-updates-and-backup.md#从上游镜像切换)。
 
 Windows PowerShell 版本和 curl 一行命令引导见 [docs/zh-cn/install/01-install.md#docker-compose](../install/01-install.md#docker-compose)。然后跟踪日志：
 

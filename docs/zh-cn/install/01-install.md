@@ -24,6 +24,8 @@ curl -fsSL https://freellmapi.co/install.sh | bash
 
 不放心直接管道给 bash？[脚本在这里](https://freellmapi.co/install.sh)。重复执行是安全的：你的 `.env`（以及加密密钥）会被保留，容器会更新到 `:latest`。可以用 `FREELLMAPI_DIR`、`PORT` 或 `HOST_BIND` 环境变量覆盖默认值。
 
+> **本 fork：** 这条一行命令是上游项目的安装脚本，安装和更新的都是上游镜像（`ghcr.io/tashfeenahmed/freellmapi:latest`），不是本 fork 的镜像。要运行本 fork，请使用下面的 [Docker Compose](#docker-compose)，它会以你固定的标签运行 `ghcr.io/yuktastv/freellmapi`。
+
 在 Windows 上，最省事的方式是桌面版 **[Releases 里的 `.exe` 安装包](https://github.com/tashfeenahmed/freellmapi/releases/latest)**（见[下文](#桌面应用)）；上面的 Docker 步骤在 WSL 或任意 bash shell 里同样可用。
 
 在 Android 上，参见实验性的 [Termux 安装指南](02-android-termux.md)。它使用 Node 内置的 SQLite 驱动，不需要 Android NDK。
@@ -34,33 +36,40 @@ curl -fsSL https://freellmapi.co/install.sh | bash
 
 ## Docker Compose
 
-在 3001 端口上同时跑起 API 和仪表盘，并把 SQLite 持久化到一个具名卷里。
+在 3001 端口上同时跑起 API 和仪表盘，并把 SQLite 持久化到一个具名卷里。Compose 文件运行本 fork 的镜像 `ghcr.io/yuktastv/freellmapi`，标签取自 `FREELLMAPI_IMAGE_TAG`。该变量是必填的：没有它 Compose 会拒绝启动。请固定到一个不可变的 `sha-<commit>` 标签；下面的命令会固定到你克隆的那个提交。
+
+> **已经在运行上游镜像？** 不要直接切换。先检查数据库兼容性并备份数据卷：见[从上游镜像切换](../deployment/02-updates-and-backup.md#从上游镜像切换)。
 
 **前置条件：** Docker、Docker Compose、OpenSSL。
 
 *在 macOS / Linux 上（Bash）：*
 ```bash
-git clone https://github.com/tashfeenahmed/freellmapi.git
+git clone https://github.com/yuktastv/freellmapi.git
 cd freellmapi
 
-# 生成用于静态存储密钥的加密密钥
+# 生成用于静态存储密钥的加密密钥，并把镜像固定到你克隆的提交
+# （main 上的每个提交都会发布一个 sha-<commit> 镜像）
 ENCRYPTION_KEY="$(openssl rand -hex 32)"
-printf "ENCRYPTION_KEY=%s\nPORT=3001\n" "$ENCRYPTION_KEY" > .env
+IMAGE_TAG="sha-$(git rev-parse --short=7 HEAD)"
+printf "ENCRYPTION_KEY=%s\nPORT=3001\nFREELLMAPI_IMAGE_TAG=%s\n" "$ENCRYPTION_KEY" "$IMAGE_TAG" > .env
 
 docker compose up -d
 ```
 
 *在 Windows 上（PowerShell）：*
 ```powershell
-git clone https://github.com/tashfeenahmed/freellmapi.git
+git clone https://github.com/yuktastv/freellmapi.git
 cd freellmapi
 
 $Bytes = New-Object Byte[] 32
 [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($Bytes)
 $ENCRYPTION_KEY = -join ($Bytes | ForEach-Object { "{0:x2}" -f $_ })
-"ENCRYPTION_KEY=$ENCRYPTION_KEY`nPORT=3001" | Out-File -Encoding utf8 .env
+$IMAGE_TAG = "sha-" + (git rev-parse --short=7 HEAD)
+"ENCRYPTION_KEY=$ENCRYPTION_KEY`nPORT=3001`nFREELLMAPI_IMAGE_TAG=$IMAGE_TAG" | Out-File -Encoding utf8 .env
 docker compose up -d
 ```
+
+如果 `docker compose up` 报 `manifest unknown`，说明该提交的镜像还没发布（合并到 `main` 后几分钟 CI 才会发布）：稍等片刻，或者从[镜像包页面](https://github.com/yuktastv/freellmapi/pkgs/container/freellmapi)固定一个更早提交的标签。
 
 > **想从另一台机器访问？** 默认情况下容器只发布在 `127.0.0.1` 上，所以从别的设备打开 `http://<服务器 IP>:3001` 是加载不出来的（页面会一直卡住）。想把它暴露到局域网，比如让树莓派在 `http://192.168.1.x:3001` 上可访问，就用 `HOST_BIND=0.0.0.0` 启动：
 >
@@ -185,13 +194,13 @@ node server/dist/index.js     # 服务和仪表盘都在 :3001 上提供
 
 ## Docker 镜像与运维
 
-FreeLLMAPI 发布一个生产镜像，里面包含 Express 服务和构建好的 React 仪表盘：
+本 fork 发布一个生产镜像，里面包含 Express 服务和构建好的 React 仪表盘：
 
 ```bash
-docker pull ghcr.io/tashfeenahmed/freellmapi:latest   # 也可以固定到某个版本，例如 :v1.2.3
+docker pull ghcr.io/yuktastv/freellmapi:sha-<commit>   # 不可变，推荐用于生产
 ```
 
-镜像是多架构的（`linux/amd64` 和 `linux/arm64`，所以树莓派上也能跑）。发布的标签有：`latest`（最新发布版本）、`main`（默认分支）、`v*.*.*`（git 发布标签）和 `sha-<commit>`。
+镜像是多架构的（`linux/amd64` 和 `linux/arm64`，所以树莓派上也能跑）。发布的标签有：`main` 上每个提交的 `sha-<commit>`（不可变，请使用这些）、`main`（每次合并都会变），以及本 fork 推送发布标签之后的 `v*.*.*` 和 `latest`（目前还没有）。
 
 仓库里自带的 `docker-compose.yml` 是推荐的安装方式：
 
@@ -200,7 +209,7 @@ docker compose up -d
 docker compose logs -f freellmapi
 ```
 
-**更新：** 运行 `docker compose pull && docker compose up -d`（数据卷和 `.env` 会保留）。如果想直接在仪表盘里更新，请在 `.env` 中设置 `WATCHTOWER_TOKEN`（例如 `openssl rand -hex 32`），并用可选的 profile 启动：
+**更新：** 把 `.env` 里的 `FREELLMAPI_IMAGE_TAG` 改成新的 `sha-<commit>` 标签，然后运行 `docker compose pull && docker compose up -d`（数据卷和 `.env` 会保留）。请先备份数据卷：见[升级容器](../deployment/02-updates-and-backup.md#升级容器)。如果想直接在仪表盘里更新，请在 `.env` 中同时设置 `WATCHTOWER_TOKEN`（例如 `openssl rand -hex 32`）和 `FREELLMAPI_SELF_UPDATE_URL=http://watchtower:8080`，并用可选的 profile 启动。Watchtower 只会重新拉取你固定的标签，所以 **立即更新** 只对跟踪可变标签（例如 `main`）的安装有效：
 
 ```bash
 docker compose --profile autoupdate up -d

@@ -1,0 +1,34 @@
+# Staging overlay for docker-compose.yml. No secrets here: ENCRYPTION_KEY stays
+# in the uncommitted .env next to docker-compose.yml.
+#
+#   docker compose -p freellmapi-staging \
+#     -f docker-compose.yml -f deploy/staging/docker-compose.staging.yml up -d
+#
+# The project name gives staging its own volume (freellmapi-staging_freellmapi-data),
+# so it never shares a database or key with production.
+# Requires Docker Compose v2.24+ (for !reset).
+#
+# docker-compose.yml requires FREELLMAPI_IMAGE_TAG before any overlay applies,
+# so set it in the staging .env (use the same sha- tag as below). The `image:`
+# here replaces the base one, so staging runs THIS pin whatever that variable
+# says: a production .env copied by mistake cannot change the staging image.
+services:
+  freellmapi:
+    # Immutable: the image CI published for merge commit df40ef7.
+    image: ghcr.io/yuktastv/freellmapi:sha-df40ef7
+    # Never build in place of the published image: a failed pull must fail
+    # the deploy, not silently ship whatever this checkout happens to contain.
+    build: !reset null
+    pull_policy: missing
+    environment:
+      # nginx on the host is the one proxy in front (it reaches the container
+      # through the Docker gateway, which is the single trusted hop).
+      TRUST_PROXY: "1"
+      DISABLE_LOCAL_TRUST: "true"
+      # No update checks and no "Update now" on staging.
+      FREELLMAPI_UPDATE_CHECK: "off"
+      FREELLMAPI_SELF_UPDATE_URL: ""
+      FREELLMAPI_SELF_UPDATE_TOKEN: ""
+    labels:
+      # Even if someone starts the autoupdate profile, Watchtower skips this.
+      com.centurylinklabs.watchtower.enable: "false"

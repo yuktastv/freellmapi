@@ -25,6 +25,8 @@ curl -fsSL https://freellmapi.co/install.sh | bash
 
 Prefer to read before you pipe to bash? [The script is here](https://freellmapi.co/install.sh). Re-running it is safe: your `.env` (and encryption key) is preserved and the container updates to `:latest`. Override the defaults with `FREELLMAPI_DIR`, `PORT`, or `HOST_BIND` env vars.
 
+> **This fork:** the one-liner is the upstream project's installer. It installs and updates to upstream's image (`ghcr.io/tashfeenahmed/freellmapi:latest`), not this fork's. To run this fork, use [Docker Compose](#docker-compose) below, which runs `ghcr.io/yuktastv/freellmapi` at the tag you pin.
+
 On Windows, the easiest path is the desktop **[`.exe` installer from Releases](https://github.com/tashfeenahmed/freellmapi/releases/latest)** ([below](#desktop-app)); the Docker steps work in WSL or any bash shell.
 
 On Android, see the experimental [Termux installation guide](02-android-termux.md). It uses Node's built-in SQLite driver and does not require the Android NDK.
@@ -35,33 +37,40 @@ Your install keeps itself updated from the signed catalog feed. The current full
 
 ## Docker Compose
 
-Runs the API and dashboard together on port 3001 and persists SQLite in a named volume.
+Runs the API and dashboard together on port 3001 and persists SQLite in a named volume. The compose file runs this fork's image, `ghcr.io/yuktastv/freellmapi`, at the tag you set in `FREELLMAPI_IMAGE_TAG`. It is required: Compose refuses to start without it. Pin an immutable `sha-<commit>` tag; the commands below pin the commit you cloned.
+
+> **Already running the upstream image?** Do not just switch. Check database compatibility and back up the data volume first: see [Switching from the upstream image](../deployment/02-updates-and-backup.md#switching-from-the-upstream-image).
 
 **Prerequisites:** Docker, Docker Compose, OpenSSL.
 
 *On macOS / Linux (Bash):*
 ```bash
-git clone https://github.com/tashfeenahmed/freellmapi.git
+git clone https://github.com/yuktastv/freellmapi.git
 cd freellmapi
 
-# Generate an encryption key for at-rest key storage
+# Generate an encryption key for at-rest key storage, and pin the image to
+# the commit you cloned (every main commit publishes a sha-<commit> image)
 ENCRYPTION_KEY="$(openssl rand -hex 32)"
-printf "ENCRYPTION_KEY=%s\nPORT=3001\n" "$ENCRYPTION_KEY" > .env
+IMAGE_TAG="sha-$(git rev-parse --short=7 HEAD)"
+printf "ENCRYPTION_KEY=%s\nPORT=3001\nFREELLMAPI_IMAGE_TAG=%s\n" "$ENCRYPTION_KEY" "$IMAGE_TAG" > .env
 
 docker compose up -d
 ```
 
 *On Windows (PowerShell):*
 ```powershell
-git clone https://github.com/tashfeenahmed/freellmapi.git
+git clone https://github.com/yuktastv/freellmapi.git
 cd freellmapi
 
 $Bytes = New-Object Byte[] 32
 [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($Bytes)
 $ENCRYPTION_KEY = -join ($Bytes | ForEach-Object { "{0:x2}" -f $_ })
-"ENCRYPTION_KEY=$ENCRYPTION_KEY`nPORT=3001" | Out-File -Encoding utf8 .env
+$IMAGE_TAG = "sha-" + (git rev-parse --short=7 HEAD)
+"ENCRYPTION_KEY=$ENCRYPTION_KEY`nPORT=3001`nFREELLMAPI_IMAGE_TAG=$IMAGE_TAG" | Out-File -Encoding utf8 .env
 docker compose up -d
 ```
+
+If `docker compose up` reports `manifest unknown`, that commit's image is not published yet (CI publishes it a few minutes after a merge to `main`): wait, or pin an earlier commit's tag from the [package page](https://github.com/yuktastv/freellmapi/pkgs/container/freellmapi).
 
 > **Reaching it from another machine?** By default the container is published only on `127.0.0.1`, so `http://<server-ip>:3001` won't load from another device (the page just hangs). To expose it on your LAN — e.g. a Raspberry Pi at `http://192.168.1.x:3001` — start it with `HOST_BIND=0.0.0.0`:
 >
@@ -232,13 +241,13 @@ than one endpoint is rejected rather than applied to an arbitrary one:
 
 ## Docker image & operations
 
-FreeLLMAPI publishes a single production image that contains the Express server and the built React dashboard:
+This fork publishes a single production image that contains the Express server and the built React dashboard:
 
 ```bash
-docker pull ghcr.io/tashfeenahmed/freellmapi:latest   # or pin a release, e.g. :v1.2.3
+docker pull ghcr.io/yuktastv/freellmapi:sha-<commit>   # immutable: recommended for production
 ```
 
-The image is multi-arch (`linux/amd64` + `linux/arm64`, so it runs on a Raspberry Pi). Published tags: `latest` (the newest release), `main` (the default branch), `v*.*.*` (git release tags), and `sha-<commit>`.
+The image is multi-arch (`linux/amd64` + `linux/arm64`, so it runs on a Raspberry Pi). Published tags: `sha-<commit>` for every `main` commit (immutable; use these), `main` (moves with every merge), and `v*.*.*` plus `latest` once the fork pushes a release tag (none yet).
 
 The included `docker-compose.yml` is the recommended install path:
 
@@ -247,7 +256,7 @@ docker compose up -d
 docker compose logs -f freellmapi
 ```
 
-**Updating:** `docker compose pull && docker compose up -d` (your volume and `.env` carry over). To update from the dashboard instead, set `WATCHTOWER_TOKEN` in `.env` (e.g. `openssl rand -hex 32`) and start with the opt-in profile:
+**Updating:** set `FREELLMAPI_IMAGE_TAG` in `.env` to the new `sha-<commit>` tag, then run `docker compose pull && docker compose up -d` (your volume and `.env` carry over). Back up the data volume first: see [Upgrading the container](../deployment/02-updates-and-backup.md#upgrading-the-container). To update from the dashboard instead, set both `WATCHTOWER_TOKEN` (e.g. `openssl rand -hex 32`) and `FREELLMAPI_SELF_UPDATE_URL=http://watchtower:8080` in `.env`, and start with the opt-in profile. Watchtower re-pulls the tag you pinned, so "Update now" only moves an install that tracks a moving tag such as `main`:
 
 ```bash
 docker compose --profile autoupdate up -d
@@ -410,7 +419,7 @@ the top.
 
 ```bash
 docker compose down -v            # -v also drops the freellmapi-data volume
-docker image rm ghcr.io/tashfeenahmed/freellmapi:latest
+docker image rm "ghcr.io/yuktastv/freellmapi:$(grep '^FREELLMAPI_IMAGE_TAG=' ~/freellmapi/.env | cut -d= -f2)"
 rm -rf ~/freellmapi               # the one-liner's directory: .env + compose file
 ```
 

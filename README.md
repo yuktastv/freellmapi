@@ -10,7 +10,7 @@ Aggregate free tiers from dozens of providers, plus custom OpenAI-compatible cha
 [![GitHub stars](https://img.shields.io/github/stars/tashfeenahmed/freellmapi?style=flat&logo=github&color=yellow)](https://github.com/tashfeenahmed/freellmapi/stargazers)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](./LICENSE)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](#contributing)
-[![Docker image](https://img.shields.io/badge/ghcr.io-freellmapi-2496ED?logo=docker&logoColor=white)](https://github.com/tashfeenahmed/freellmapi/pkgs/container/freellmapi)
+[![Docker image](https://img.shields.io/badge/ghcr.io-freellmapi-2496ED?logo=docker&logoColor=white)](https://github.com/yuktastv/freellmapi/pkgs/container/freellmapi)
 [![Ask DeepWiki](https://img.shields.io/badge/DeepWiki-Ask-blue)](https://deepwiki.com/tashfeenahmed/freellmapi)
 
 **[freellmapi.co](https://freellmapi.co/?utm_source=github&utm_medium=readme&utm_campaign=repository&utm_content=readme_top)** · browse the full catalog: 474 model families, 635 free endpoints
@@ -168,6 +168,8 @@ The scope is deliberately narrow — see [what's not supported yet](docs/en/arch
 ```bash
 curl -fsSL https://freellmapi.co/install.sh | bash
 ```
+
+> **This fork:** the one-liner is the upstream project's installer and installs upstream's image (`ghcr.io/tashfeenahmed/freellmapi`), not this fork's. To run this fork, use [Docker Compose](docs/en/install/01-install.md#docker-compose) with `ghcr.io/yuktastv/freellmapi` at a pinned `sha-<commit>` tag.
 
 Prefer to read before you pipe to bash? [The script is here](https://freellmapi.co/install.sh). Re-running it is safe: your `.env` (and encryption key) is preserved and the container updates to `:latest`.
 

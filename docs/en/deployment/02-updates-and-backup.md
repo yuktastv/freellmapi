@@ -5,28 +5,72 @@
 Keeping a Docker deployment current, protecting the SQLite data volume, and making installs reproducible with declarative configuration.
 
 - [Upgrading the container](#upgrading-the-container)
+- [Switching from the upstream image](#switching-from-the-upstream-image)
 - [Dashboard update checker (#635 / #703)](#dashboard-update-checker-635--703)
 - [Backing up the SQLite data volume](#backing-up-the-sqlite-data-volume)
 - [Declarative config & catalog controls (#f4cd7b4)](#declarative-config--catalog-controls-f4cd7b4)
 
 ## Upgrading the container
 
-Track `:latest` (or pin a release tag) and re-create the container on a new image:
+`docker-compose.yml` runs `ghcr.io/yuktastv/freellmapi:${FREELLMAPI_IMAGE_TAG}`. The tag is required (there is no default) and should be an immutable `sha-<commit>` tag. To upgrade:
+
+1. Back up the data volume (see [Backing up the SQLite data volume](#backing-up-the-sqlite-data-volume)). Migrations only run forward; there is no automatic downgrade, so the backup is your rollback.
+2. In `.env`, change `FREELLMAPI_IMAGE_TAG` to the new `sha-<commit>` tag.
+3. Re-create the container on the new image:
 
 ```bash
 docker compose pull && docker compose up -d
 ```
 
-Two invariants across any upgrade:
+Three invariants across any upgrade:
 
 1. **Keep the same `.env` `ENCRYPTION_KEY`.** Provider keys are encrypted at rest; a changed key makes every stored key undecryptable. See [02-security-and-keys.md](../env/02-security-and-keys.md).
-2. **Keep the same data volume** (`freellmapi-data` at `/app/server/data`). Migrations run idempotently on boot.
+2. **Keep the same data volume** (`freellmapi-data` at `/app/server/data`) **and the same Compose project name** (the directory name, unless you pass `-p`). The volume is named `<project>_freellmapi-data`, so a different project name starts with an empty database. Migrations run idempotently on boot.
+3. **Only move forward.** Never point an install at an image older than the one that last ran against its database (see the next section).
 
-The desktop dashboard's update dialog shows this exact command for Docker installs (see below).
+For Docker installs the dashboard's update dialog prints a command that pulls and restarts only once `.env` already names the new tag. It reads `.env` but never edits it, because `.env` holds `ENCRYPTION_KEY`.
+
+## Switching from the upstream image
+
+An install that has been running upstream's image (`ghcr.io/tashfeenahmed/freellmapi`) must not be switched to this fork until you have checked that its database is compatible. The migration runner applies the migrations it knows and **silently ignores any applied migration it does not know**. If upstream's image is newer than this fork, it may already have changed the schema in ways this fork's code does not expect, and nothing will warn you. There is no automatic downgrade.
+
+Do all of this before changing the image:
+
+1. **Find the image and version you run now.**
+
+   ```bash
+   CID="$(docker ps -q --filter label=com.docker.compose.service=freellmapi)"
+   docker inspect --format '{{.Config.Image}} version={{ index .Config.Labels "org.opencontainers.image.version" }} revision={{ index .Config.Labels "org.opencontainers.image.revision" }}' "$CID"
+   ```
+
+   Settings in the dashboard also shows the running release. This fork's release is the `version` in [`desktop/package.json`](../../../desktop/package.json). If the image you run is a newer release than that, stop: do not switch.
+
+2. **Confirm database compatibility.** List the migrations your database has applied, and compare them with the migrations this fork ships (run from your checkout of this fork):
+
+   ```bash
+   docker exec "$CID" node -e "const D=require('better-sqlite3');const d=new D(process.env.FREEAPI_DB_PATH||'/app/server/data/freeapi.db',{readonly:true});for(const r of d.prepare('SELECT filename FROM migrations ORDER BY filename').all())console.log(r.filename)" > applied-migrations.txt
+   ls server/src/db/migrations | grep '\.ts$' | sort > fork-migrations.txt
+   comm -23 applied-migrations.txt fork-migrations.txt
+   ```
+
+   The database is opened read-only. **No output means compatible.** Any line printed is a migration your database already has that this fork does not know: do not switch.
+
+3. **Back up the persistent volume and `.env`.** Stop the container so SQLite is consistent, archive the volume, and keep a copy of `.env` (it holds `ENCRYPTION_KEY`; without it the backup's provider keys cannot be decrypted). Store both somewhere private.
+
+   ```bash
+   VOLUME="$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/app/server/data"}}{{.Name}}{{end}}{{end}}' "$CID")"
+   docker stop "$CID"
+   docker run --rm -v "$VOLUME":/data:ro -v "$PWD":/backup alpine tar czf /backup/freellmapi-data-backup.tgz -C /data .
+   cp -p .env .env.backup && chmod 600 .env.backup
+   ```
+
+4. **Switch.** Use this fork's `docker-compose.yml` from the same directory, so the project name and volume stay the same. Keep your `ENCRYPTION_KEY`, set `FREELLMAPI_IMAGE_TAG` to this fork's `sha-<commit>` tag, then `docker compose pull && docker compose up -d`. Confirm with `docker compose images freellmapi` that it now runs `ghcr.io/yuktastv/freellmapi`.
+
+To roll back, stop the container, restore the archive into the volume, and start the image you were running before. Never run an older image against a database a newer one has migrated.
 
 ## Dashboard update checker (#635 / #703)
 
-Settings carries a single update surface: it reports the running release, lists recent commits, and — when the installation is Docker — prints the `docker compose pull && docker compose up -d` upgrade command. Relevant controls:
+Settings carries a single update surface: it reports the running release, lists recent commits, and — when the installation is Docker — prints an upgrade command that runs `docker compose pull && docker compose up -d` once `FREELLMAPI_IMAGE_TAG` in `.env` names the new `sha-<commit>` tag. Relevant controls:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |

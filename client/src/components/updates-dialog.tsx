@@ -8,6 +8,7 @@ import { UPDATE_CHECK_CHANGED_EVENT } from '@/components/update-reminder'
 import { apiFetch } from '@/lib/api'
 import { checkDesktopUpdates, hasDesktopUpdater, useDesktopUpdater } from '@/lib/desktop-updater'
 import { useDockerUpdate } from '@/lib/docker-update'
+import { dockerUpdateCommand, sourceUpdateCommand } from '@/lib/update-commands'
 import { RELEASES_URL } from '@/lib/updates'
 import { useI18n } from '@/i18n'
 
@@ -19,15 +20,15 @@ interface CheckResult {
   localSha: string | null
   version: string | null
   selfUpdate?: boolean
+  repository?: string
+  /** Short SHA of the commit the install would update to. */
+  remoteSha?: string
 }
 
 /** Connectivity failures read better as "check your connection" than as a raw code. */
 function isNetworkError(message: string): boolean {
   return /ERR_INTERNET_DISCONNECTED|ERR_NAME_NOT_RESOLVED|ERR_NETWORK|ERR_CONNECTION|ENOTFOUND|EAI_AGAIN|ENETUNREACH|ECONNREFUSED|ECONNRESET|ETIMEDOUT|getaddrinfo|network/i.test(message)
 }
-
-const DOCKER_COMMAND = 'docker compose pull && docker compose up -d'
-const SOURCE_COMMAND = 'git fetch https://github.com/tashfeenahmed/freellmapi.git main && git merge --ff-only FETCH_HEAD && npm ci && npm run build'
 
 /**
  * The one place updates live: opened from the ⋯ menu or the update pill.
@@ -195,7 +196,7 @@ function UpdatesContent() {
           )
         }
         if (result.installation === 'docker' || result.installation === 'source') {
-          const command = result.installation === 'docker' ? DOCKER_COMMAND : SOURCE_COMMAND
+          const command = result.installation === 'docker' ? dockerUpdateCommand(result.remoteSha) : sourceUpdateCommand(result.repository)
           return (
             <Status icon="new" title={t('settings.updateAvailable')} detail={releaseNotes}>
               <div className="mt-3 flex items-start gap-2 rounded-lg bg-muted/60 py-1.5 ps-3 pe-1.5">
